@@ -6,9 +6,16 @@
   <title>Входящие заявки</title>
   <style>
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
-    textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
-    button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    textarea, button { font: inherit; }
+    textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; }
+    button { padding: .4rem .8rem; }
+    button:disabled { opacity: .6; cursor: default; }
+    #status { margin: 1rem 0; padding: .75rem; border-left: 4px solid currentColor; }
+    #status.error { color: #8a1f11; background: #fdecea; }
+    #status.manual { color: #6b4b00; background: #fff6e0; }
+    #status.empty { color: #333; background: #f0f0f0; }
+    .topic { margin: 1rem 0 .5rem; font-weight: 600; }
+    .hint { color: #555; font-size: .875rem; }
   </style>
 </head>
 <body>
@@ -18,18 +25,88 @@
     <textarea id="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+
+  <div id="status" aria-live="polite" hidden></div>
+
+  <section id="result" hidden>
+    <p class="topic">Тема: <span id="topic"></span></p>
+    <label for="draft">Черновик ответа <span class="hint">— проверьте перед отправкой</span></label>
+    <textarea id="draft" rows="6" readonly></textarea>
+  </section>
+
   <script type="module">
+    const TOPIC_LABELS = { delivery: "Доставка", pricing: "Цены", other: "Другое" };
+
     const form = document.querySelector("form");
+    const message = document.querySelector("#message");
+    const submit = document.querySelector("button[type=submit]");
+    const status = document.querySelector("#status");
     const result = document.querySelector("#result");
+    const topic = document.querySelector("#topic");
+    const draft = document.querySelector("#draft");
+
+    function clearResult() {
+      topic.textContent = "";
+      draft.value = "";
+      result.hidden = true;
+    }
+
+    function showStatus(kind, text) {
+      status.className = kind;
+      status.textContent = text;
+      status.hidden = false;
+    }
+
+    function showReady(data) {
+      status.hidden = true;
+      topic.textContent = TOPIC_LABELS[data.topic] ?? data.topic;
+      draft.value = data.draft;
+      result.hidden = false;
+    }
+
+    function showManualReview() {
+      showStatus(
+        "manual",
+        "Модель не смогла разобрать заявку. Прочитайте текст и ответьте клиенту вручную — черновик не создан.",
+      );
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+
+      const text = message.value.trim();
+      clearResult();
+      status.hidden = true;
+
+      if (text === "") {
+        showStatus("empty", "Введите текст заявки — поле не должно быть пустым.");
+        return;
+      }
+
+      submit.disabled = true;
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        const data = await reply.json();
+
+        if (data.status === "ready") {
+          showReady(data);
+        } else if (data.status === "manual_review") {
+          showManualReview();
+        } else if (data.status === "invalid_input") {
+          showStatus("error", "Заявку не удалось прочитать. Введите текст заявки заново.");
+        } else {
+          showStatus("error", "Ответ сервиса непонятен. Обработайте заявку вручную.");
+        }
+      } catch {
+        clearResult();
+        showStatus("error", "Сервис недоступен. Проверьте заявку вручную и повторите позже.");
+      } finally {
+        submit.disabled = false;
+      }
     });
   </script>
 </body>
